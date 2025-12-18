@@ -155,9 +155,18 @@ def save_to_db(role, content):
         except:
             pass
 
-# --- 初始化 ---
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+# --- 初始化 (多角色記憶體管理) ---
+# 我們用一個字典來存所有角色的對話，key是角色名，value是對話列表
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = {}
+
+# 確保當前角色的記憶體存在
+if current_persona['role'] not in st.session_state.chat_history:
+    st.session_state.chat_history[current_persona['role']] = []
+
+# 將當前畫面的 messages 指向對應角色的記憶體
+# 這樣我們操作 messages 時，其實就是在操作 st.session_state.chat_history[角色名]
+st.session_state.messages = st.session_state.chat_history[current_persona['role']]
 
 # --- System Prompt ---
 system_prompt = f"""
