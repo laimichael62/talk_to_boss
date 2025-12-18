@@ -2,3 +2,5 @@ streamlit
 openai
 st-gsheets-connection
 pandas
+edge-tts
+asyncio

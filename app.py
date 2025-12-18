@@ -3,39 +3,26 @@ from openai import OpenAI
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import datetime
+import edge_tts
+import asyncio
+import tempfile
+import os
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="Small Talk Pro", layout="wide")
-st.title("🌐 Small Talk Master: 對話訓練 (Pro)")
+st.set_page_config(page_title="Network Master Pro (Voice)", layout="wide")
+st.title("🎙️ Network Master: 沉浸式商業模擬")
 
-# --- 連接資料庫 (Google Sheets) ---
-# 這是建立連接的關鍵指令
-conn = st.connection("gsheets", type=GSheetsConnection)
+# --- 連接資料庫 ---
+try:
+    conn = st.connection("gsheets", type=GSheetsConnection)
+except:
+    st.error("資料庫連線失敗，請檢查 secrets.toml")
+    conn = None
 
-# --- 登入系統 (User Identification) ---
-if "user_id" not in st.session_state:
-    st.session_state.user_id = None
+# --- 角色矩陣 (含語音設定) ---
+# voice_id 參考: en-US-BrianNeural (男), en-US-AriaNeural (女)
+talk to boss
 
-# 如果還沒登入，顯示登入畫面
-if not st.session_state.user_id:
-    with st.form("login_form"):
-        st.header("🔐 用戶登入")
-        username = st.text_input("請輸入你的代號 (Username):", placeholder="例如: Neo_01")
-        submitted = st.form_submit_button("進入系統")
-        
-        if submitted and username:
-            st.session_state.user_id = username
-            st.rerun()
-    st.stop() # 停止執行下面的代碼，直到登入
-
-# --- 登入後顯示用戶資訊 ---
-st.sidebar.write(f"👤 當前用戶: **{st.session_state.user_id}**")
-if st.sidebar.button("登出"):
-    st.session_state.user_id = None
-    st.session_state.messages = []
-    st.rerun()
-
-# --- 角色矩陣 ---
 personas = {
     "商業 - Gordon (華爾街巨鱷)": {
         "role": "Gordon",
@@ -94,136 +81,158 @@ personas = {
 }
 
 
-# --- 側邊欄：設定 ---
+# --- 側邊欄 ---
 with st.sidebar:
-    st.header("🎯 選擇目標")
-    selected_key = st.selectbox("選擇行業領袖：", list(personas.keys()))
+    st.header("🎯 設定中心")
+    selected_key = st.selectbox("選擇對話目標：", list(personas.keys()))
     current_persona = personas[selected_key]
     
-    # API Key 邏輯
+    st.divider()
+    
+    # 這裡我們需要兩個 Key
+    # 1. DeepSeek (負責大腦)
     if "DEEPSEEK_API_KEY" in st.secrets:
-        api_key = st.secrets["DEEPSEEK_API_KEY"]
-        st.success("✅ 系統連線正常")
+        deepseek_key = st.secrets["DEEPSEEK_API_KEY"]
+        st.success("🧠 DeepSeek: 已連接")
     else:
-        api_key = st.text_input("輸入 DeepSeek Key", type="password")
+        deepseek_key = st.text_input("DeepSeek Key", type="password")
 
-# --- 資料庫邏輯：讀取歷史訊息 ---
-# 我們定義一個函數來從 Google Sheets 撈資料
-def load_history(username, persona_role):
-    try:
-        # 讀取整個表格
-        df = conn.read(worksheet="Sheet1", ttl=0) # ttl=0 代表不快取，每次都拿最新的
-        # 篩選出當前用戶和當前角色的對話
-        if not df.empty:
-            user_history = df[
-                (df["username"] == username) & 
-                (df["target_persona"] == persona_role)
-            ]
-            return user_history
-        return pd.DataFrame()
-    except Exception:
-        return pd.DataFrame()
+    # 2. OpenAI (負責耳朵 - Whisper)
+    # 如果你想用免費的 Edge-TTS (嘴巴) 不需要 Key
+    # 但如果要語音轉文字，目前最穩的是 OpenAI Whisper
+    if "OPENAI_API_KEY" in st.secrets:
+        openai_key = st.secrets["OPENAI_API_KEY"]
+        st.success("👂 Whisper: 已連接")
+    else:
+        openai_key = st.text_input("OpenAI Key (用於語音輸入)", type="password", help="如果你沒有 OpenAI Key，請使用文字輸入。")
 
-# --- 資料庫邏輯：寫入訊息 ---
-def save_message(username, persona_role, role, content):
+    st.divider()
+    if st.button("🗑️ 清除對話"):
+        st.session_state.messages = []
+        st.rerun()
+
+# --- 功能函數：TTS (文字轉語音 - 免費版) ---
+async def generate_audio(text, voice, output_file):
+    communicate = edge_tts.Communicate(text, voice)
+    await communicate.save(output_file)
+
+def play_voice(text, voice_id):
     try:
-        # 讀取現有資料
-        df = conn.read(worksheet="Sheet1", ttl=0)
+        # 建立暫存檔
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
+            temp_filename = fp.name
         
-        # 建立新的一行
-        new_row = pd.DataFrame([{
-            "username": username,
-            "target_persona": persona_role,
-            "role": role,
-            "content": content,
-            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }])
+        # 執行異步生成
+        asyncio.run(generate_audio(text, voice_id, temp_filename))
         
-        # 合併並寫回
-        updated_df = pd.concat([df, new_row], ignore_index=True)
-        conn.update(worksheet="Sheet1", data=updated_df)
+        # 播放
+        st.audio(temp_filename, format="audio/mp3", autoplay=True)
         
+        # 清理 (非必要，Streamlit 會自動清理部分)
     except Exception as e:
-        st.error(f"存檔失敗: {e}")
+        st.error(f"語音生成失敗: {e}")
 
-# --- 初始化 Session State ---
+# --- 功能函數：STT (語音轉文字 - 需 OpenAI Key) ---
+def transcribe_audio(audio_file, api_key):
+    try:
+        client = OpenAI(api_key=api_key) # 使用 OpenAI 官方服務
+        transcription = client.audio.transcriptions.create(
+            model="whisper-1", 
+            file=audio_file
+        )
+        return transcription.text
+    except Exception as e:
+        st.error(f"聽寫失敗 (請確認有 OpenAI Key): {e}")
+        return None
+
+# --- 資料庫函數 (簡化版) ---
+def save_to_db(role, content):
+    if conn:
+        try:
+            # 這裡簡單處理，實際商業專案需更嚴謹的結構
+            data = pd.DataFrame([{"timestamp": datetime.datetime.now(), "role": role, "content": content}])
+            # 由於 streamlit-gsheets 寫入較慢，這裡僅做示範，建議實際使用時用 append 模式
+            # conn.update(worksheet="Sheet1", data=data) 
+            pass 
+        except:
+            pass
+
+# --- 初始化 ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
-    
-    # 剛登入時，嘗試從資料庫載入舊記錄
-    history_df = load_history(st.session_state.user_id, current_persona["role"])
-    if not history_df.empty:
-        for index, row in history_df.iterrows():
-            st.session_state.messages.append({"role": row["role"], "content": row["content"]})
-
-# 如果切換了角色，我們要重新載入該角色的歷史記錄
-if "last_persona" not in st.session_state:
-    st.session_state.last_persona = current_persona["role"]
-
-if st.session_state.last_persona != current_persona["role"]:
-    st.session_state.messages = [] # 清空畫面
-    # 載入新角色的歷史
-    history_df = load_history(st.session_state.user_id, current_persona["role"])
-    if not history_df.empty:
-        for index, row in history_df.iterrows():
-            st.session_state.messages.append({"role": row["role"], "content": row["content"]})
-    st.session_state.last_persona = current_persona["role"]
-
 
 # --- System Prompt ---
 system_prompt = f"""
 You are '{current_persona['role']}'. {current_persona['style']}
-Mission: Test the user. Win Condition: {current_persona['win_condition']}
+Win Condition: {current_persona['win_condition']}
 Protocol:
-1. Stay in character.
-2. Keep responses < 60 words.
+1. Stay in character 100%.
+2. Keep responses < 50 words (Spoken style).
 3. Output "|||" then critique in Traditional Chinese.
 """
 
-# --- 對話介面 ---
-if api_key:
-    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
-
-    # 顯示訊息
+# --- 核心邏輯 ---
+if deepseek_key:
+    # 1. 顯示歷史對話
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # 輸入
-    if prompt := st.chat_input(f"回應 {current_persona['role']}..."):
-        # 1. 顯示並保存用戶訊息
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-        
-        # 寫入資料庫 (User)
-        save_message(st.session_state.user_id, current_persona["role"], "user", prompt)
+    # 2. 獲取用戶輸入 (文字 或 語音)
+    user_input = None
+    
+    # A. 語音輸入區
+    audio_value = st.audio_input("🎤 按下錄音 (需 OpenAI Key)")
+    
+    # B. 文字輸入區
+    text_value = st.chat_input(f"回應 {current_persona['role']}...")
 
-        # 2. 呼叫 AI
+    # 處理輸入優先級
+    if audio_value and openai_key:
+        with st.spinner("正在聽寫..."):
+            transcribed_text = transcribe_audio(audio_value, openai_key)
+            if transcribed_text:
+                user_input = transcribed_text
+    elif text_value:
+        user_input = text_value
+
+    # 3. 處理對話
+    if user_input:
+        # 顯示用戶訊息
+        st.session_state.messages.append({"role": "user", "content": user_input})
+        with st.chat_message("user"):
+            st.markdown(user_input)
+        
+        # 呼叫 DeepSeek
+        client = OpenAI(api_key=deepseek_key, base_url="https://api.deepseek.com")
         api_msgs = [{"role": "system", "content": system_prompt}] + st.session_state.messages
         
         try:
-            response = client.chat.completions.create(
-                model="deepseek-chat", messages=api_msgs, stream=False, temperature=1.3
-            )
-            full_res = response.choices[0].message.content
+            with st.spinner(f"{current_persona['role']} 正在思考..."):
+                response = client.chat.completions.create(
+                    model="deepseek-chat", messages=api_msgs, stream=False, temperature=1.3
+                )
             
+            full_res = response.choices[0].message.content
             if "|||" in full_res:
                 reply, feedback = full_res.split("|||", 1)
             else:
                 reply, feedback = full_res, ""
 
-            # 3. 顯示並保存 AI 訊息
+            # 顯示 AI 回覆
             st.session_state.messages.append({"role": "assistant", "content": reply.strip()})
             with st.chat_message("assistant"):
                 st.markdown(reply.strip())
-            
-            # 寫入資料庫 (AI)
-            save_message(st.session_state.user_id, current_persona["role"], "assistant", reply.strip())
+                # --- 關鍵：觸發語音播放 ---
+                play_voice(reply.strip(), current_persona['voice_id'])
 
+            # 顯示教練分析
             if feedback:
-                with st.expander("教練分析"):
-                    st.info(feedback.strip())
+                with st.sidebar:
+                    st.info(f"**教練分析：**\n{feedback.strip()}")
 
         except Exception as e:
-            st.error(f"錯誤: {e}")
+            st.error(f"連線錯誤: {e}")
+
+else:
+    st.warning("請先輸入 DeepSeek Key")
