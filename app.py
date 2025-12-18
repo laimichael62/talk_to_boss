@@ -21,8 +21,6 @@ except:
 
 # --- 角色矩陣 (含語音設定) ---
 # voice_id 參考: en-US-BrianNeural (男), en-US-AriaNeural (女)
-talk to boss
-
 personas = {
     "商業 - Gordon (華爾街巨鱷)": {
         "role": "Gordon",
